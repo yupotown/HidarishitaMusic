@@ -1,4 +1,4 @@
-﻿# include <Siv3D.hpp>
+﻿#include <Siv3D.hpp>
 
 #define BUTTON_PLAY L"ButtonPlay"
 #define BUTTON_PAUSE L"ButtonPause"
@@ -6,23 +6,91 @@
 #define SLIDER_POSITION L"SliderPosition"
 #define SLIDER_VOLUME L"SliderVolume"
 
+struct PlaylistItem
+{
+	String path;
+	String title;
+	double volume;
+};
+
 class SoundPlayer
 {
 private:
 
 	GUI m_gui;
 
+	Array<PlaylistItem> playlist;
+	String playlistPath;
+	int32 playingIndex;
+
 	Sound m_sound;
 
+	bool playing;
+
 	const Font font;
-	String title;
 	int titleOffset;
+
+	void loadPlaylist(String path)
+	{
+		const auto json = JSONReader(path);
+
+		Array<PlaylistItem> temp;
+		for (const auto &jsonItem : json.root().getArray())
+		{
+			temp.push_back(
+				{
+					jsonItem[L"path"].get<String>(),
+					jsonItem[L"title"].get<String>(),
+					jsonItem[L"volume"].get<double>()
+				});
+		}
+
+		playlist = temp;
+		playlistPath = path;
+		playingIndex = -1;
+
+		setToNext();
+
+		m_gui.button(BUTTON_PLAY).enabled = true;
+	}
+
+	void setToNext()
+	{
+		if (playlist.empty())
+		{
+			return;
+		}
+
+		playingIndex = (playingIndex + 1) % playlist.size();
+
+		m_sound = Sound(playlist[playingIndex].path);
+		setVolume(playlist[playingIndex].volume);
+
+		titleOffset = 0;
+	}
+
+	String getPlayingTitle() const
+	{
+		return (playingIndex < 0) ? L"" : playlist[playingIndex].title;
+	}
+
+	int32 getTitleWidth() const
+	{
+		return font(getPlayingTitle()).region().w;
+	}
+
+	void setVolume(double volume)
+	{
+		m_sound.setVolume(volume);
+		m_gui.slider(SLIDER_VOLUME).setValue(volume);
+	}
 
 public:
 
 	SoundPlayer()
 		: m_gui(GUIStyle::Default),
-		font(20, Typeface::Medium, FontStyle::Outline)
+		font(20, Typeface::Medium, FontStyle::Outline),
+		playingIndex(-1)
 	{
 		m_gui.add(BUTTON_PLAY, GUIButton::Create(L">"));
 
@@ -39,6 +107,12 @@ public:
 
 	void update()
 	{
+		if (playing && !m_sound.isPlaying())
+		{
+			setToNext();
+			m_sound.play();
+		}
+
 		m_gui.button(BUTTON_PLAY).enabled = (m_sound && !m_sound.isPlaying());
 
 		m_gui.button(BUTTON_PAUSE).enabled = m_sound.isPlaying();
@@ -46,19 +120,25 @@ public:
 		if (m_gui.button(BUTTON_PLAY).pushed)
 		{
 			m_sound.play();
+			playing = true;
 		}
 		else if (m_gui.button(BUTTON_PAUSE).pushed)
 		{
 			m_sound.pause();
+			playing = false;
 		}
 		else if (m_gui.button(BUTTON_OPEN).pushed)
 		{
-			m_sound.pause();
-
-			m_sound = Dialog::OpenSound();
-
-			title = L"曲タイトル";
-			titleOffset = 0;
+			const Array<ExtensionFilterPair> filters
+			{
+				ExtensionFilterPair(L"JSONファイル", L"*.json"),
+				ExtensionFilterPair(L"すべてのファイル", L"*.*"),
+			};
+			const auto &path = Dialog::GetOpen(filters);
+			if (path.has_value())
+			{
+				loadPlaylist(path.value());
+			}
 		}
 
 		if (m_gui.slider(SLIDER_POSITION).hasChanged)
@@ -75,18 +155,19 @@ public:
 
 		titleOffset -= 1;
 
-		const auto region = font(title).region();
-		if (titleOffset < -region.w)
+		const auto w = getTitleWidth();
+		if (titleOffset < -w)
 		{
-			titleOffset += region.w + Window::Width() / 2;
+			titleOffset += w + Window::Width() / 2;
 		}
 	}
 
 	void drawVisualizer() const
 	{
-		const auto region = font(title).region();
+		const auto& title = getPlayingTitle();
+		const auto w = getTitleWidth();
 		font(title).draw(22 + titleOffset, 0);
-		font(title).draw(22 + titleOffset + region.w + Window::Width() / 2, 0);
+		font(title).draw(22 + titleOffset + w + Window::Width() / 2, 0);
 		Rect(0, 0, 22, 40).draw(Color(0, 255, 0));
 		font(L"♪").draw(2, 0);
 
